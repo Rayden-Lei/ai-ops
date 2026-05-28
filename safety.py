@@ -85,8 +85,13 @@ MEDIUM_RISK_PATTERNS = [
     re.compile(r"\b(kill|killall)\s+"),
     re.compile(r"\b(mv|cp)\s+.*\s+/(etc|usr|var|bin|sbin|boot|lib)"),
     re.compile(r"crontab\s+-e"),
-    re.compile(r"\b(apt|apt-get|yum|dnf)\s+(install|remove|purge)"),
 ]
+
+# 包管理器：任意子命令都需用户确认（避免静默安装/卸载）
+PACKAGE_MANAGERS = {
+    "apt", "apt-get", "aptitude", "dpkg", "yum", "dnf", "rpm",
+    "snap", "zypper", "pacman",
+}
 
 PREFIX_WRAPPERS = {"sudo", "env"}
 
@@ -207,6 +212,14 @@ def _review_one(segment: str) -> SafetyResult:
                 f"高风险操作: {stripped}",
                 True,
             )
+
+    # 包管理器（任意子命令都需确认）
+    if first_word in PACKAGE_MANAGERS:
+        return SafetyResult(
+            RiskLevel.MEDIUM,
+            f"中风险操作: 包管理器 '{first_word}'",
+            True,
+        )
 
     # 中风险模式
     for pattern in MEDIUM_RISK_PATTERNS:

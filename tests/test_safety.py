@@ -98,6 +98,23 @@ def test_command_medium(cmd):
 
 
 @pytest.mark.parametrize("cmd", [
+    "apt update",
+    "apt-get install x",
+    "dpkg -i foo.deb",
+    "dpkg --remove foo",
+    "snap install x",
+    "yum install x",
+    "dnf remove y",
+    "rpm -e pkg",
+    "sudo apt install vim",
+])
+def test_command_package_manager_medium(cmd):
+    result = review_command(cmd)
+    assert result.risk_level == RiskLevel.MEDIUM
+    assert result.require_confirm is True
+
+
+@pytest.mark.parametrize("cmd", [
     "ls -la",
     "df -h",
     "ps aux",
