@@ -1,0 +1,10 @@
+{
+  "api_key": "sk-xxx",
+  "base_url": "https://api.deepseek.com",
+  "model": "deepseek-chat",
+  "max_turns": 25,
+  "command_timeout": 30,
+  "log_max_size_mb": 10,
+  "log_backup_count": 5,
+  "color_output": true
+}
