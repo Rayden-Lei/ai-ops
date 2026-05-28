@@ -15,6 +15,7 @@ AiOps 的核心卖点是"敢让 AI 执行 shell 命令"，其信任基础是 `sa
 3. **交互式检测只看首词**：`shlex.split(stripped)[0]`，导致 `sudo vim`、`echo x; vim` 漏过。
 4. **`.ssh` 仅覆盖 `~/` 和 `/root/`**：`/home/alice/.ssh/id_rsa` 不在 DENY 名单。
 5. **shlex.quote 空头支票**：系统提示词承诺"对动态参数用 shlex.quote 转义"，但工具层未实现，且对 `execute_command` 这种整串命令本就难以强制。
+6. **专用工具命令注入（绕过整个安全层）**：6 个"只读"专用工具用 f-string 把 LLM 提供的参数直接拼进 shell 命令，未做任何转义，且**完全不经 `review_command`**。例如 `check_service(name="nginx; rm -rf ~")` → `systemctl is-active nginx; rm -rf ~` 直接执行。涉及 [tools.py](../../../tools.py)：`check_service`(`name`)、`check_disk`(`path`)、`check_log`(`unit`/`since`)、`network_check`(`target`)、`check_port`(`port`)、`check_process`(`limit`)。这是真实可利用的命令注入面，比漏洞 5 严重得多。
 
 ## 范围
 
@@ -23,10 +24,12 @@ AiOps 的核心卖点是"敢让 AI 执行 shell 命令"，其信任基础是 `sa
 - 新增 `tests/test_safety.py`
 - 新增测试基建：`requirements-dev.txt`、`pytest.ini`
 - 新增 `docs/security/known-bypasses.md`（已知绕过登记表）
-- 修正 `agent.py` 系统提示词中关于 shlex.quote 的不实表述
+- `tools.py`：6 个专用工具对 LLM 提供的参数用 `shlex.quote()` 转义，关闭命令注入面（漏洞 6）
+- 修正 `agent.py` 系统提示词中关于 shlex.quote 的表述（转义在专用工具内部完成；execute_command 的整串命令仍由 LLM 负责，保留指导）
 
 **不改：**
-- 工具接口：`review_command(command) -> SafetyResult`、`review_file_path(path) -> FileReview` 的签名与返回类型保持不变，`tools.py` 几乎零改动
+- 安全审查接口：`review_command(command) -> SafetyResult`、`review_file_path(path) -> FileReview` 的签名与返回类型保持不变
+- `tools.py` 的工具签名、`@tool` 接口、`_run_command` 行为（仅在命令构造处插入 `shlex.quote`）
 - `logger.py`、`aiops.py` CLI、agent 的整体逻辑
 
 **非目标（记入登记表，留作下一阶段）：**
@@ -80,6 +83,24 @@ review_command(cmd):
 - 匹配前先 normalize 路径，解析 `..`（使用 `os.path.normpath`，不解析符号链接以避免触发文件系统访问）
 - 其余 DENY / WARN 规则保持不变
 
+### 专用工具参数转义（tools.py，漏洞 6）
+
+6 个专用工具在 f-string 构造命令处，对 LLM 提供的字符串参数包 `shlex.quote()`：
+
+| 工具 | 参数 | 处理 |
+|---|---|---|
+| `check_service` | `name` | `shlex.quote(name)` |
+| `check_disk` | `path` | `shlex.quote(path)` |
+| `check_log` | `unit`、`since` | `shlex.quote(...)`（去掉原本手写的单引号包裹） |
+| `network_check` | `target` | `shlex.quote(target)` |
+| `check_port` | `port` | 类型为 `int`；强制 `int()` 校验，非法值返回错误而非拼接 |
+| `check_process` | `limit` | 同上，`int()` 校验 |
+
+设计要点：
+- 转义在**命令构造的边界**完成（防御放在数据进入 shell 的位置），不依赖 LLM 自觉。
+- `execute_command` 的整串命令无法在工具层定位"动态参数"，仍由 LLM 按提示词指导负责；这部分不变。
+- 因此 `agent.py` 提示词中那句"对动态参数用 shlex.quote 转义"改为准确表述：专用工具参数由工具层自动转义，execute_command 命令需 LLM 自行确保安全。
+
 ## 错误处理 / fail-safe
 
 - **tokenize 失败**（`shlex` 抛 `ValueError`，如引号不配对）→ 不放行，返回 `HIGH + require_confirm`，message "命令解析失败，无法完整审查"
@@ -99,6 +120,7 @@ review_command(cmd):
   - 解析失败（引号不配对 → HIGH + require_confirm）
 - **文件路径三级**：DENY（`~/.ssh/id_rsa`、`/root/.ssh/`、`/home/alice/.ssh/`、`/etc/shadow`、含 private/secret/credential）、WARN（`*.pem`、`*.key`、`.bash_history`）、ALLOW（普通路径）
 - **rm 安全目标**：`/tmp/x`、`./x`、`~/x`、相对路径 → 不拦截
+- **专用工具参数转义（漏洞 6）**：`check_service(name="nginx; rm -rf ~")`、`check_disk(path="/; rm -rf ~")`、`network_check(target="x$(whoami)")` 等注入尝试，断言构造出的命令中注入串被 `shlex.quote` 包裹、不会拆分为多条命令；`check_port`/`check_process` 传非法非数字值返回错误而非拼接
 
 **实现顺序（TDD）**：先按目标行为写测试（现有代码会在新漏洞上失败），再重构 `safety.py` 直至全绿。
 
@@ -126,5 +148,6 @@ review_command(cmd):
 2. 写 `tests/test_safety.py`（TDD，对目标行为，先红）
 3. 重构 `safety.py`：`_split_compound` / `_strip_prefix` / `_review_one` / `_max_risk` + 文件读取器检查 + `review_file_path` 加固 + 解析失败 fail-safe
 4. 跑测试至全绿
-5. 写 `docs/security/known-bypasses.md`
-6. 修正 `agent.py` 提示词中 shlex.quote 表述
+5. 在 `tools.py` 6 个专用工具的命令构造处插入 `shlex.quote()` / 数值校验（漏洞 6），补注入测试
+6. 写 `docs/security/known-bypasses.md`
+7. 修正 `agent.py` 提示词中 shlex.quote 表述
