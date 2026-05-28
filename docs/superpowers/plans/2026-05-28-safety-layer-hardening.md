@@ -6,13 +6,13 @@
 
 **Architecture:** `review_command` 先对原始整串跑 BLOCKED 模式（防 tokenize 破坏连续标点如 fork 炸弹），再用 `shlex(punctuation_chars=True)` 按 `;`/`&&`/`||`/`|`/`&`/换行拆分复合命令，剥离 `sudo`/`env` 前缀后逐段送入 `_review_one`，取最高风险聚合。专用工具在命令构造边界用 `shlex.quote()` 转义、数值参数强制 `int()` 校验。
 
-**Tech Stack:** Python 3.10+、标准库 `shlex`/`posixpath`/`re`、pytest（参数化）。测试在 Windows 上运行但命令面向 Linux，故路径规范化用 `posixpath` 而非 `os.path`。
+**Tech Stack:** Python 3.10+、标准库 `shlex`/`os.path`/`re`、pytest（参数化）。项目运行环境为 Linux，按地道 Linux 写法实现，不做 Windows 适配。
 
 ---
 
 ## 设计约束（实现前必读）
 
-- **跨平台陷阱**：本仓库在 Windows 开发，但命令面向 Linux。`os.path.normpath('/etc/shadow')` 在 Windows 会变成 `\etc\shadow`，破坏正则。**必须用 `posixpath.normpath`。**
+- **Linux-only**：项目运行环境为 Linux，按地道 Linux 写法实现（`os.path`、`/bin/bash`、`systemctl` 等），不引入 Windows 兼容层或相关注释。本地若在 Windows 跑测试与 Linux 有差异，应在 Linux 侧验证，不改产品代码迁就 Windows。
 - **fork 炸弹**：`:(){ :|:& };:` 经 tokenize 会被拆碎，连续标点正则失效。**因此 `review_command` 必须先对原始整串跑一遍 BLOCKED 模式**，再做分段审查。
 - **接口不变**：`review_command(command) -> SafetyResult`、`review_file_path(path) -> FileReview` 签名与返回类型保持不变。
 - **测试 import**：`test_safety.py` 只 import `safety`（纯标准库，零运行时依赖）；`test_tools.py` import `tools`（需 langchain）。根目录放空 `conftest.py` 保证 `import safety` 可用。
@@ -77,7 +77,7 @@ git commit -m "test: 引入 pytest 测试基建"
 
 ## Task 2: 强化 `review_file_path`（漏洞 4）
 
-把 `.ssh` 覆盖扩到任意 `.ssh/` 目录（含 `/home/*/.ssh/`），匹配前用 `posixpath.normpath` 解析 `..`。
+把 `.ssh` 覆盖扩到任意 `.ssh/` 目录（含 `/home/*/.ssh/`），匹配前用 `os.path.normpath` 解析 `..`。
 
 **Files:**
 - Modify: `safety.py`（`import` 段、`FILE_DENY_PATTERNS`、`review_file_path`）
@@ -134,11 +134,10 @@ Expected: `test_file_path_deny[/home/alice/.ssh/authorized_keys]` 等失败（�
 
 - [ ] **Step 3: 修改 `safety.py`**
 
-把文件顶部 import 改为（新增 `os` 与 `posixpath`）：
+把文件顶部 import 改为（新增 `os`）：
 
 ```python
 import os
-import posixpath
 import re
 import shlex
 from dataclasses import dataclass
@@ -162,7 +161,7 @@ FILE_DENY_PATTERNS = [
 ```python
 def review_file_path(path: str) -> FileReview:
     home = str(Path.home())
-    expanded = posixpath.normpath(path.replace("~", home))
+    expanded = os.path.normpath(path.replace("~", home))
 
     for pattern in FILE_DENY_PATTERNS:
         if pattern.search(expanded) or pattern.search(path):
