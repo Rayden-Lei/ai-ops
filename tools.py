@@ -63,7 +63,7 @@ def execute_command(command: str, confirmed: bool = False) -> str:
             f"[需要确认] 风险等级: {result.risk_level.value.upper()}\n"
             f"{result.message}\n"
             f"命令: {command}\n"
-            f"请询问用户是否确认执行此命令。用户确认后，再次调用 execute_command(command, confirmed=True)。"
+            "请询问用户是否确认执行此命令。用户确认后，再次调用 execute_command(command, confirmed=True)。"
         )
 
     _log("execute_command", request_id, command=command,
@@ -95,7 +95,7 @@ def read_file(path: str, head: int | None = None, tail: int | None = None, confi
              action="pending_confirm")
         return (
             f"[需要确认] 文件 '{path}' 可能包含敏感信息。\n"
-            f"请询问用户是否确认读取。用户确认后，再次调用 read_file(path, confirmed=True)。"
+            "请询问用户是否确认读取。用户确认后，再次调用 read_file(path, confirmed=True)。"
         )
 
     try:

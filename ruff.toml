@@ -1,0 +1,7 @@
+# 项目运行环境为 Linux，Python 3.10+
+target-version = "py310"
+line-length = 100
+
+# 沿用 ruff 默认规则集（E4/E7/E9 + F：以 pyflakes 为主，低误报、抓真问题，
+# 如未用导入、未定义名、import 不在顶部等）。
+# isort(I) 暂不启用，待本地能跑 ruff --fix 自动整理 import 顺序后再开。

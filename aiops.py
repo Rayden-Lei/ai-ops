@@ -187,7 +187,6 @@ def handle_ctrl_c(signum, frame):
 def _stream_agent(agent, messages: list, recursion_limit: int) -> str:
     """流式输出 token，实时用 rich 渲染 markdown（Live 原地更新）。"""
     from rich.live import Live
-    from rich.text import Text
 
     full_response = ""
     is_final_reply = False

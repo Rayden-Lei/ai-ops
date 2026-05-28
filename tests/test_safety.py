@@ -1,6 +1,6 @@
 import pytest
 
-from safety import review_file_path, FileReview
+from safety import FileReview, RiskLevel, review_command, review_file_path
 
 
 @pytest.mark.parametrize("path", [
@@ -38,9 +38,6 @@ def test_file_path_warn(path):
 ])
 def test_file_path_allow(path):
     assert review_file_path(path) == FileReview.ALLOW
-
-
-from safety import review_command, RiskLevel
 
 
 @pytest.mark.parametrize("cmd", [
