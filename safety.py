@@ -1,3 +1,5 @@
+import os
+import posixpath
 import re
 import shlex
 from dataclasses import dataclass
@@ -42,8 +44,7 @@ SYSTEM_HIGH_PATHS = {
 
 # read_file 禁止目录
 FILE_DENY_PATTERNS = [
-    re.compile(r"^~/\.ssh/"),
-    re.compile(r"^/root/\.ssh/"),
+    re.compile(r"(^|/)\.ssh(/|$)"),
     re.compile(r"/etc/shadow"),
     re.compile(r"/etc/gshadow"),
     re.compile(r"/proc/\d+/mem"),
@@ -179,7 +180,8 @@ def review_command(command: str) -> SafetyResult:
 
 
 def review_file_path(path: str) -> FileReview:
-    expanded = path.replace("~", str(Path.home()))
+    home = str(Path.home())
+    expanded = posixpath.normpath(path.replace("~", home))
 
     for pattern in FILE_DENY_PATTERNS:
         if pattern.search(expanded) or pattern.search(path):
@@ -191,7 +193,7 @@ def review_file_path(path: str) -> FileReview:
             return FileReview.DENY
 
     for pattern in FILE_WARN_PATTERNS:
-        if pattern.search(expanded):
+        if pattern.search(expanded) or pattern.search(path):
             return FileReview.WARN
 
     return FileReview.ALLOW
