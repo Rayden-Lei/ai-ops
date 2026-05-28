@@ -240,6 +240,10 @@ def _stream_agent(agent, messages: list, recursion_limit: int) -> str:
 
             if seen_tool_call_msg and not is_final_reply and content:
                 is_final_reply = True
+                # 工具调用前的旁白与最终答案之间补空行，否则会拼成一行，
+                # 导致最终答案开头的 "# 标题" 变成行中字面 # 而非标题
+                if full_response and not full_response.endswith("\n"):
+                    full_response += "\n\n"
             if not seen_tool_call_msg:
                 is_final_reply = True
             if not is_final_reply:
