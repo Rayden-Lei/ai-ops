@@ -41,3 +41,26 @@ def test_check_log_quotes_unit_and_since(capture_cmd):
     tools.check_log.func(unit="ng; rm -rf ~", since="1h; reboot")
     assert shlex.quote("ng; rm -rf ~") in capture_cmd[0]
     assert shlex.quote("1h; reboot") in capture_cmd[0]
+
+
+def test_check_port_rejects_non_int(capture_cmd):
+    out = tools.check_port.func("22; rm -rf ~")
+    assert "无效端口" in out
+    assert capture_cmd == []
+
+
+def test_check_port_int_ok(capture_cmd):
+    tools.check_port.func(8080)
+    assert "8080" in capture_cmd[0]
+
+
+def test_check_process_rejects_non_int(capture_cmd):
+    out = tools.check_process.func(limit="20; rm -rf ~")
+    assert "无效 limit" in out
+    assert capture_cmd == []
+
+
+def test_check_log_rejects_non_int_lines(capture_cmd):
+    out = tools.check_log.func(lines="100; rm -rf ~")
+    assert "无效 lines" in out
+    assert capture_cmd == []

@@ -146,7 +146,14 @@ def check_service(name: str) -> str:
 def check_port(port: int | None = None) -> str:
     """查看端口占用情况。不传 port 列出所有监听端口。"""
     request_id = uuid.uuid4().hex[:8]
-    cmd = "ss -tlnp" if port is None else f"ss -tlnp | grep ':{port} '"
+    if port is None:
+        cmd = "ss -tlnp"
+    else:
+        try:
+            port = int(port)
+        except (ValueError, TypeError):
+            return f"无效端口: {port!r}"
+        cmd = f"ss -tlnp | grep ':{port} '"
     output = _run_command(cmd, request_id=request_id)
     _log("check_port", request_id, command=cmd, result="success",
          output_len=len(output))
@@ -168,6 +175,10 @@ def check_disk(path: str | None = None) -> str:
 def check_process(sort_by: str = "memory", limit: int = 20) -> str:
     """查看进程列表和资源占用。sort_by: 'memory' 或 'cpu'。"""
     request_id = uuid.uuid4().hex[:8]
+    try:
+        limit = int(limit)
+    except (ValueError, TypeError):
+        return f"无效 limit: {limit!r}"
     sort_flag = "%cpu" if sort_by == "cpu" else "%mem"
     cmd = f"ps aux --sort=-{sort_flag} | head -n {limit + 1}"
     output = _run_command(cmd, request_id=request_id)
@@ -184,6 +195,10 @@ def check_log(
 ) -> str:
     """查看系统日志。优先 journalctl，不可用时回退到 /var/log/。"""
     request_id = uuid.uuid4().hex[:8]
+    try:
+        lines = int(lines)
+    except (ValueError, TypeError):
+        return f"无效 lines: {lines!r}"
 
     # 尝试 journalctl
     cmd_parts = ["journalctl", "--no-pager", f"-n {lines}"]
