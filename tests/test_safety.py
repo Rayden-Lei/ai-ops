@@ -140,3 +140,23 @@ def test_command_parse_failure_fails_safe():
     result = review_command('echo "unbalanced')
     assert result.risk_level == RiskLevel.HIGH
     assert result.require_confirm is True
+
+
+@pytest.mark.parametrize("cmd", [
+    "cat /etc/shadow",
+    "cat ~/.ssh/id_rsa",
+    "tail -n 5 /home/alice/.ssh/authorized_keys",
+    "less /etc/gshadow",
+])
+def test_filereader_denied_path_blocked(cmd):
+    assert review_command(cmd).risk_level == RiskLevel.BLOCKED
+
+
+def test_filereader_warn_path_medium():
+    result = review_command("cat /etc/ssl/server.pem")
+    assert result.risk_level == RiskLevel.MEDIUM
+    assert result.require_confirm is True
+
+
+def test_filereader_normal_path_safe():
+    assert review_command("cat /etc/nginx/nginx.conf").risk_level == RiskLevel.SAFE

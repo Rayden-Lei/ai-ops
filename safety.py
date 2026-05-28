@@ -34,6 +34,12 @@ INTERACTIVE_COMMANDS = {
     "bash", "zsh", "sh",
 }
 
+# 文件读取器：堵 cat /etc/shadow 这类经 execute_command 绕过 read_file 路径审查
+FILE_READERS = {
+    "cat", "less", "more", "head", "tail", "nl", "od", "xxd",
+    "strings", "tac", "view",
+}
+
 # 系统关键路径
 SYSTEM_CRITICAL_PATHS = {"/", "/*"}
 
@@ -185,6 +191,25 @@ def _review_one(segment: str) -> SafetyResult:
                 f"命令被安全策略拦截: {stripped}",
                 False,
             )
+
+    # 文件读取器读取敏感文件（堵 cat /etc/shadow 这类跨工具绕过；启发式）
+    if first_word in FILE_READERS:
+        for arg in parts[1:]:
+            if arg.startswith("-"):
+                continue
+            review = review_file_path(arg)
+            if review == FileReview.DENY:
+                return SafetyResult(
+                    RiskLevel.BLOCKED,
+                    f"命令试图读取敏感文件: {arg}",
+                    False,
+                )
+            if review == FileReview.WARN:
+                return SafetyResult(
+                    RiskLevel.MEDIUM,
+                    f"命令试图读取可能含敏感信息的文件: {arg}",
+                    True,
+                )
 
     # 高风险模式
     for pattern, checker in HIGH_RISK_PATTERNS:
