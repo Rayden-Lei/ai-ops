@@ -1,5 +1,4 @@
 import os
-import posixpath
 import re
 import shlex
 from dataclasses import dataclass
@@ -181,7 +180,7 @@ def review_command(command: str) -> SafetyResult:
 
 def review_file_path(path: str) -> FileReview:
     home = str(Path.home())
-    expanded = posixpath.normpath(path.replace("~", home))
+    expanded = os.path.normpath(path.replace("~", home))
 
     for pattern in FILE_DENY_PATTERNS:
         if pattern.search(expanded) or pattern.search(path):

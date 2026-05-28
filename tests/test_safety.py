@@ -32,6 +32,8 @@ def test_file_path_warn(path):
     "/etc/nginx/nginx.conf",
     "/var/log/syslog",
     "/home/bob/notes.txt",
+    "/etc/ssh/sshd_config",
+    "/home/bob/myssh/config",
 ])
 def test_file_path_allow(path):
     assert review_file_path(path) == FileReview.ALLOW
