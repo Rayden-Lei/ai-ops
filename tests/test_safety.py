@@ -37,3 +37,85 @@ def test_file_path_warn(path):
 ])
 def test_file_path_allow(path):
     assert review_file_path(path) == FileReview.ALLOW
+
+
+from safety import review_command, RiskLevel
+
+
+@pytest.mark.parametrize("cmd", [
+    "rm -rf /",
+    "rm -rf /*",
+    "mkfs.ext4 /dev/sdb",
+    "dd if=/dev/zero of=/dev/sda",
+    ":(){ :|:& };:",
+    "echo x > /dev/sda",
+    "rm -rf / ; echo done",
+])
+def test_command_blocked(cmd):
+    assert review_command(cmd).risk_level == RiskLevel.BLOCKED
+
+
+@pytest.mark.parametrize("cmd", [
+    "vim /etc/hosts",
+    "top",
+    "sudo vim /etc/hosts",
+    "echo hello; vim",
+])
+def test_command_interactive_blocked(cmd):
+    assert review_command(cmd).risk_level == RiskLevel.BLOCKED
+
+
+@pytest.mark.parametrize("cmd", [
+    "rm -rf /etc",
+    "rm -rf /usr/local",
+    "chmod 777 /etc",
+    "chown -R user /var",
+    "shutdown -h now",
+    "reboot",
+    "iptables -F",
+    "userdel bob",
+])
+def test_command_high(cmd):
+    result = review_command(cmd)
+    assert result.risk_level == RiskLevel.HIGH
+    assert result.require_confirm is True
+
+
+@pytest.mark.parametrize("cmd", [
+    "systemctl restart nginx",
+    "systemctl stop nginx",
+    "kill 1234",
+    "killall nginx",
+    "apt install vim",
+    "crontab -e",
+    "mv foo /etc/bar",
+    "ls && systemctl restart nginx",
+])
+def test_command_medium(cmd):
+    result = review_command(cmd)
+    assert result.risk_level == RiskLevel.MEDIUM
+    assert result.require_confirm is True
+
+
+@pytest.mark.parametrize("cmd", [
+    "ls -la",
+    "df -h",
+    "ps aux",
+    "echo hello",
+    "rm -rf /tmp/cache",
+    "rm -rf ./build",
+    "rm -rf ~/scratch",
+    "cat /etc/nginx/nginx.conf",
+])
+def test_command_safe(cmd):
+    assert review_command(cmd).risk_level == RiskLevel.SAFE
+
+
+def test_command_empty():
+    assert review_command("   ").risk_level == RiskLevel.SAFE
+
+
+def test_command_parse_failure_fails_safe():
+    result = review_command('echo "unbalanced')
+    assert result.risk_level == RiskLevel.HIGH
+    assert result.require_confirm is True

@@ -31,7 +31,7 @@ class SafetyResult:
 INTERACTIVE_COMMANDS = {
     "vim", "vi", "nano", "top", "htop", "less", "more", "man",
     "ssh", "mysql", "psql", "redis-cli", "python", "python3",
-    "bash", "zsh", "sh", "apt", "apt-get", "dpkg",
+    "bash", "zsh", "sh",
 }
 
 # 系统关键路径
@@ -88,6 +88,18 @@ MEDIUM_RISK_PATTERNS = [
     re.compile(r"\b(apt|apt-get|yum|dnf)\s+(install|remove|purge)"),
 ]
 
+PREFIX_WRAPPERS = {"sudo", "env"}
+
+COMPOUND_OPERATORS = {";", "&&", "||", "|", "&", "\n"}
+
+_RISK_ORDER = {
+    RiskLevel.SAFE: 0,
+    RiskLevel.LOW: 1,
+    RiskLevel.MEDIUM: 2,
+    RiskLevel.HIGH: 3,
+    RiskLevel.BLOCKED: 4,
+}
+
 
 def _is_rm_target_safe(target: str) -> bool:
     target = target.strip().rstrip("/")
@@ -110,17 +122,48 @@ def _is_system_path(target: str) -> bool:
     return False
 
 
-def review_command(command: str) -> SafetyResult:
-    stripped = command.strip()
+def _split_compound(command: str) -> list[str]:
+    """按 ; && || | & 和换行拆分复合命令，尊重引号。引号不配对会抛 ValueError。"""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens = list(lexer)
+    segments = []
+    current = []
+    for tok in tokens:
+        if tok in COMPOUND_OPERATORS or (tok and set(tok) <= {";", "&", "|"}):
+            if current:
+                segments.append(" ".join(current))
+                current = []
+        else:
+            current.append(tok)
+    if current:
+        segments.append(" ".join(current))
+    return segments
+
+
+def _strip_prefix(segment: str) -> str:
+    """剥离子命令开头的 sudo / env VAR=VALUE 包装。"""
+    parts = segment.split()
+    while parts and parts[0] in PREFIX_WRAPPERS:
+        if parts[0] == "env":
+            parts = parts[1:]
+            while parts and "=" in parts[0] and not parts[0].startswith("-"):
+                parts = parts[1:]
+        else:
+            parts = parts[1:]
+    return " ".join(parts)
+
+
+def _review_one(segment: str) -> SafetyResult:
+    """审查单个子命令（已无复合操作符）。"""
+    stripped = segment.strip()
     if not stripped:
-        return SafetyResult(RiskLevel.SAFE, "空命令", False)
+        return SafetyResult(RiskLevel.SAFE, "", False)
 
-    # 1. 检测交互式命令
-    try:
-        first_word = shlex.split(stripped)[0]
-    except ValueError:
-        first_word = stripped.split()[0] if stripped.split() else ""
+    parts = stripped.split()
+    first_word = parts[0]
 
+    # 交互式命令
     if first_word in INTERACTIVE_COMMANDS:
         return SafetyResult(
             RiskLevel.BLOCKED,
@@ -128,7 +171,7 @@ def review_command(command: str) -> SafetyResult:
             False,
         )
 
-    # 2. 匹配禁止模式
+    # 禁止模式（逐段，补原始整串未覆盖的复合场景，如 'rm -rf / ; x'）
     for pattern in BLOCKED_PATTERNS:
         if pattern.search(stripped):
             return SafetyResult(
@@ -137,7 +180,7 @@ def review_command(command: str) -> SafetyResult:
                 False,
             )
 
-    # 3. 匹配高风险模式
+    # 高风险模式
     for pattern, checker in HIGH_RISK_PATTERNS:
         m = pattern.search(stripped)
         if m:
@@ -165,7 +208,7 @@ def review_command(command: str) -> SafetyResult:
                 True,
             )
 
-    # 4. 匹配中风险模式
+    # 中风险模式
     for pattern in MEDIUM_RISK_PATTERNS:
         if pattern.search(stripped):
             return SafetyResult(
@@ -174,8 +217,38 @@ def review_command(command: str) -> SafetyResult:
                 True,
             )
 
-    # 5. 默认安全
     return SafetyResult(RiskLevel.SAFE, "", False)
+
+
+def _max_risk(results: list[SafetyResult]) -> SafetyResult:
+    """聚合多段审查结果，取最高风险。BLOCKED 不需确认。"""
+    if not results:
+        return SafetyResult(RiskLevel.SAFE, "", False)
+    worst = max(results, key=lambda r: _RISK_ORDER[r.risk_level])
+    if worst.risk_level == RiskLevel.BLOCKED:
+        return SafetyResult(RiskLevel.BLOCKED, worst.message, False)
+    require_confirm = any(r.require_confirm for r in results)
+    return SafetyResult(worst.risk_level, worst.message, require_confirm)
+
+
+def review_command(command: str) -> SafetyResult:
+    stripped = command.strip()
+    if not stripped:
+        return SafetyResult(RiskLevel.SAFE, "空命令", False)
+
+    # 先对原始整串跑 BLOCKED 模式（tokenize 会拆碎 fork 炸弹等连续标点）
+    for pattern in BLOCKED_PATTERNS:
+        if pattern.search(stripped):
+            return SafetyResult(RiskLevel.BLOCKED, f"命令被安全策略拦截: {stripped}", False)
+
+    # 拆分复合命令，逐段审查，取最高风险
+    try:
+        segments = _split_compound(stripped)
+    except ValueError:
+        return SafetyResult(RiskLevel.HIGH, "命令解析失败，无法完整审查", True)
+
+    results = [_review_one(_strip_prefix(seg)) for seg in segments]
+    return _max_risk(results)
 
 
 def review_file_path(path: str) -> FileReview:
