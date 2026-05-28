@@ -1,3 +1,4 @@
+import shlex
 import subprocess
 import uuid
 from pathlib import Path
@@ -128,14 +129,15 @@ def read_file(path: str, head: int | None = None, tail: int | None = None, confi
 def check_service(name: str) -> str:
     """查看 systemd 服务状态（is-active / is-enabled / status）。"""
     request_id = uuid.uuid4().hex[:8]
+    q = shlex.quote(name)
     parts = []
     for sub in ["is-active", "is-enabled"]:
-        out = _run_command(f"systemctl {sub} {name}", request_id=request_id)
+        out = _run_command(f"systemctl {sub} {q}", request_id=request_id)
         parts.append(f"{sub}: {out}")
-    status_out = _run_command(f"systemctl status {name} --no-pager", request_id=request_id)
+    status_out = _run_command(f"systemctl status {q} --no-pager", request_id=request_id)
     parts.append(f"status:\n{status_out}")
     output = "\n".join(parts)
-    _log("check_service", request_id, command=f"systemctl status {name}",
+    _log("check_service", request_id, command=f"systemctl status {q}",
          result="success", output_len=len(output))
     return output
 
@@ -155,7 +157,7 @@ def check_port(port: int | None = None) -> str:
 def check_disk(path: str | None = None) -> str:
     """查看磁盘使用情况。不传 path 显示所有挂载点。"""
     request_id = uuid.uuid4().hex[:8]
-    cmd = "df -h" if path is None else f"df -h {path}"
+    cmd = "df -h" if path is None else f"df -h {shlex.quote(path)}"
     output = _run_command(cmd, request_id=request_id)
     _log("check_disk", request_id, command=cmd, result="success",
          output_len=len(output))
@@ -186,9 +188,9 @@ def check_log(
     # 尝试 journalctl
     cmd_parts = ["journalctl", "--no-pager", f"-n {lines}"]
     if unit:
-        cmd_parts.append(f"-u {unit}")
+        cmd_parts.append(f"-u {shlex.quote(unit)}")
     if since:
-        cmd_parts.append(f"--since '{since}'")
+        cmd_parts.append(f"--since {shlex.quote(since)}")
     cmd = " ".join(cmd_parts)
     output = _run_command(cmd, request_id=request_id)
 
@@ -216,12 +218,13 @@ def network_check(target: str, method: str = "ping") -> str:
     """网络诊断。method: 'ping'（连通性）、'curl'（HTTP 状态）、'traceroute'（路由追踪）。"""
     request_id = uuid.uuid4().hex[:8]
 
+    q = shlex.quote(target)
     if method == "curl":
-        cmd = f"curl -sS -o /dev/null -w 'HTTP Status: %{{http_code}}\\nTime: %{{time_total}}s\\n' --max-time 10 {target}"
+        cmd = f"curl -sS -o /dev/null -w 'HTTP Status: %{{http_code}}\\nTime: %{{time_total}}s\\n' --max-time 10 {q}"
     elif method == "traceroute":
-        cmd = f"traceroute -m 15 {target}"
+        cmd = f"traceroute -m 15 {q}"
     else:
-        cmd = f"ping -c 4 {target}"
+        cmd = f"ping -c 4 {q}"
 
     output = _run_command(cmd, request_id=request_id)
     _log("network_check", request_id, command=cmd, result="success",
