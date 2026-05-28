@@ -147,12 +147,13 @@ def _split_compound(command: str) -> list[str]:
 
 
 def _strip_prefix(segment: str) -> str:
-    """剥离子命令开头的 sudo / env VAR=VALUE 包装。"""
+    """剥离子命令开头的 sudo / env（含选项与 VAR=VALUE）包装，定位真正的命令。"""
     parts = segment.split()
     while parts and parts[0] in PREFIX_WRAPPERS:
         if parts[0] == "env":
             parts = parts[1:]
-            while parts and "=" in parts[0] and not parts[0].startswith("-"):
+            # 跳过 env 的选项（-i/-u 等）与 VAR=VALUE 赋值，否则 env -i cmd 会绕过审查
+            while parts and (parts[0].startswith("-") or "=" in parts[0]):
                 parts = parts[1:]
         else:
             parts = parts[1:]

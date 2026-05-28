@@ -60,6 +60,7 @@ def test_command_blocked(cmd):
     "top",
     "sudo vim /etc/hosts",
     "echo hello; vim",
+    "env -i vim",
 ])
 def test_command_interactive_blocked(cmd):
     assert review_command(cmd).risk_level == RiskLevel.BLOCKED
@@ -86,7 +87,6 @@ def test_command_high(cmd):
     "systemctl stop nginx",
     "kill 1234",
     "killall nginx",
-    "apt install vim",
     "crontab -e",
     "mv foo /etc/bar",
     "ls && systemctl restart nginx",
@@ -106,7 +106,11 @@ def test_command_medium(cmd):
     "yum install x",
     "dnf remove y",
     "rpm -e pkg",
+    "pacman -S pkg",
+    "zypper install pkg",
+    "aptitude install pkg",
     "sudo apt install vim",
+    "env -i apt install vim",
 ])
 def test_command_package_manager_medium(cmd):
     result = review_command(cmd)
