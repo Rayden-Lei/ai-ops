@@ -12,6 +12,7 @@ from safety import review_file_path, FileReview
     "/etc/../etc/shadow",
     "/etc/gshadow",
     "/proc/123/mem",
+    "/proc/self/mem",
     "/opt/app/secret.conf",
     "/data/credentials.json",
 ])
@@ -49,6 +50,8 @@ from safety import review_command, RiskLevel
     "dd if=/dev/zero of=/dev/sda",
     ":(){ :|:& };:",
     "echo x > /dev/sda",
+    "echo x > /dev/nvme0n1",
+    "echo y > /dev/vda",
     "rm -rf / ; echo done",
 ])
 def test_command_blocked(cmd):
@@ -127,9 +130,17 @@ def test_command_package_manager_medium(cmd):
     "rm -rf ./build",
     "rm -rf ~/scratch",
     "cat /etc/nginx/nginx.conf",
+    "echo x > /dev/null",
+    "rm -rf /tmp/a /tmp/b",
 ])
 def test_command_safe(cmd):
     assert review_command(cmd).risk_level == RiskLevel.SAFE
+
+
+def test_rm_multi_target_with_system_path_not_safe():
+    result = review_command("rm -rf /tmp/x /etc")
+    assert result.risk_level == RiskLevel.HIGH
+    assert result.require_confirm is True
 
 
 def test_command_empty():

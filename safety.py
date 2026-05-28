@@ -52,7 +52,7 @@ FILE_DENY_PATTERNS = [
     re.compile(r"(^|/)\.ssh(/|$)"),
     re.compile(r"/etc/shadow"),
     re.compile(r"/etc/gshadow"),
-    re.compile(r"/proc/\d+/mem"),
+    re.compile(r"/proc/(\d+|self)/mem"),
 ]
 
 FILE_DENY_KEYWORDS = ["private", "secret", "credential"]
@@ -72,7 +72,7 @@ BLOCKED_PATTERNS = [
     re.compile(r"mkfs\."),
     re.compile(r"dd\s+.*of=/dev/"),
     re.compile(r":\(\)\{\s*:\|:&\s*\};:"),
-    re.compile(r">\s*/dev/[sh]d[a-z]"),
+    re.compile(r">\s*/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d+n\d+)"),
 ]
 
 # 高风险命令模式
@@ -113,16 +113,22 @@ _RISK_ORDER = {
 
 
 def _is_rm_target_safe(target: str) -> bool:
-    target = target.strip().rstrip("/")
-    if not target:
+    # rm 可带多个目标，任一目标不安全则整体不安全（防 'rm -rf /tmp/x /etc' 误放行）
+    tokens = target.split()
+    if not tokens:
         return False
-    if target.startswith("/tmp") or target.startswith("/var/log"):
-        return True
-    if target.startswith("./") or target.startswith("~/"):
-        return True
-    if not target.startswith("/"):
-        return True
-    return False
+    for tok in tokens:
+        t = tok.rstrip("/")
+        if not t:
+            return False
+        if t.startswith("/tmp") or t.startswith("/var/log"):
+            continue
+        if t.startswith("./") or t.startswith("~/"):
+            continue
+        if not t.startswith("/"):
+            continue
+        return False
+    return True
 
 
 def _is_system_path(target: str) -> bool:
