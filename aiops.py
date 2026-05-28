@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import re
 import readline
 import signal
 import sys
@@ -12,7 +13,8 @@ from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
-from rich.markdown import Markdown
+from rich.markdown import Heading, Markdown
+from rich.text import Text
 
 from agent import create_agent
 from logger import OpsLogger
@@ -26,6 +28,31 @@ GREEN = "green"
 RED = "red"
 YELLOW = "yellow"
 GRAY = "dim"
+
+# 标题里的 emoji 常被终端字体渲染成豆腐块，渲染时一并去掉
+_HEADING_EMOJI_RE = re.compile(
+    "[\U0001f300-\U0001faff\U00002600-\U000027bf\U0001f1e6-\U0001f1ff"
+    "\U00002b00-\U00002bff\U0000fe0f\U00002190-\U000021ff]"
+)
+
+
+class _LeftHeading(Heading):
+    """rich 默认把标题居中；这里改为左对齐，并剥离标题里的 emoji。"""
+
+    def __rich_console__(self, console, options):
+        text = self.text
+        text.justify = "left"
+        plain = _HEADING_EMOJI_RE.sub("", text.plain).rstrip()
+        heading = Text(plain, style=self.style_name)
+        if self.tag == "h2":
+            yield Text("")
+        yield heading
+
+
+class LeftMarkdown(Markdown):
+    """标题左对齐、标题去 emoji 的终端 Markdown 渲染。"""
+
+    elements = {**Markdown.elements, "heading_open": _LeftHeading}
 
 
 def load_config(config_path: str | None = None) -> dict:
@@ -221,7 +248,7 @@ def _stream_agent(agent, messages: list, recursion_limit: int) -> str:
             if content:
                 full_response += content
                 # 每收到一个 token 就更新 Live 显示
-                live.update(Markdown(full_response))
+                live.update(LeftMarkdown(full_response))
 
     return full_response
 
@@ -297,7 +324,7 @@ def run_interactive(agent, config: dict, recursion_limit: int = 21,
             if m["role"] == "user":
                 console.print(f"[bold]aiops>[/bold] {m['content']}")
             else:
-                console.print(Markdown(m["content"]))
+                console.print(LeftMarkdown(m["content"]))
             print()
 
     print_colored("AiOps 已启动，输入命令开始对话", GREEN, use_color)
