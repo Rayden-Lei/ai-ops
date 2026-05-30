@@ -63,7 +63,11 @@ class OpsLogger:
         output_len: int = 0,
         error: str = "",
         level: str = "INFO",
+        **extra,
     ):
+        """记录一次工具调用。已知字段为强类型；**extra 兜底接纳工具层未来追加的
+        字段（如 sandboxed/sandbox_requested），避免每加一字段就改 logger 签名。
+        值为 None/空串/0 的强类型字段不写入；extra 内全部原样写入。"""
         extra_data = {
             "request_id": request_id,
             "tool": tool,
@@ -82,6 +86,7 @@ class OpsLogger:
             extra_data["output_len"] = output_len
         if error:
             extra_data["error"] = error
+        extra_data.update(extra)
 
         log_level = getattr(logging, level.upper(), logging.INFO)
         record = self._logger.makeRecord(
