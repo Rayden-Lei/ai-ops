@@ -5,6 +5,16 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+from safety_allowlist import is_allowed
+
+try:
+    import bashlex
+    import bashlex.errors  # noqa: F401
+    _BASHLEX_AVAILABLE = True
+except ImportError:
+    bashlex = None
+    _BASHLEX_AVAILABLE = False
+
 
 class RiskLevel(Enum):
     SAFE = "safe"
@@ -75,6 +85,9 @@ BLOCKED_PATTERNS = [
     re.compile(r">\s*/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d+n\d+)"),
 ]
 
+# 设备写重定向（bashlex 路径用，匹配规范化后的目标）
+_DEV_WRITE_RE = re.compile(r"^/dev/(sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d+n\d+)")
+
 # 高风险命令模式
 HIGH_RISK_PATTERNS = [
     (re.compile(r"rm\s+(-[a-zA-Z]*[rf]){1,2}\s+(.+)"), "_check_rm_target"),
@@ -140,7 +153,10 @@ def _is_system_path(target: str) -> bool:
 
 
 def _split_compound(command: str) -> list[str]:
-    """按 ; && || | & 和换行拆分复合命令，尊重引号。引号不配对会抛 ValueError。"""
+    """按 ; && || | & 和换行拆分复合命令，尊重引号。引号不配对会抛 ValueError。
+
+    bashlex 不可用时的回退路径。
+    """
     lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
     lexer.whitespace_split = True
     tokens = list(lexer)
@@ -158,18 +174,110 @@ def _split_compound(command: str) -> list[str]:
     return segments
 
 
+def _looks_like_assignment(token: str) -> bool:
+    """识别 bash NAME=VALUE 形式的环境赋值。NAME 必须以字母/下划线开头，
+    其余为 [A-Za-z0-9_]。`if=/dev/zero` 这种以小写字母开头的也会被误判为
+    assignment，但 _strip_prefix 仅剥离前导段直到遇到第一个非赋值非包装词，
+    故不会误剥 dd 的参数。"""
+    if "=" not in token or token.startswith(("-", "=")):
+        return False
+    name = token.split("=", 1)[0]
+    if not name or name[0].isdigit():
+        return False
+    return all(c.isalnum() or c == "_" for c in name)
+
+
 def _strip_prefix(segment: str) -> str:
-    """剥离子命令开头的 sudo / env（含选项与 VAR=VALUE）包装，定位真正的命令。"""
+    """剥离子命令前导的 NAME=VAL 赋值与 sudo/env（含选项）包装，
+    定位真正要执行的命令。"""
     parts = segment.split()
-    while parts and parts[0] in PREFIX_WRAPPERS:
-        if parts[0] == "env":
+    while parts:
+        p = parts[0]
+        if _looks_like_assignment(p):
             parts = parts[1:]
-            # 跳过 env 的选项（-i/-u 等）与 VAR=VALUE 赋值，否则 env -i cmd 会绕过审查
-            while parts and (parts[0].startswith("-") or "=" in parts[0]):
+            continue
+        if p == "env":
+            parts = parts[1:]
+            # env 的选项 (-i/-u/-S 等) 与紧跟的 NAME=VAL；
+            # 否则 `env -i cmd` / `env FOO=x cmd` 会绕过审查
+            while parts and (parts[0].startswith("-") or _looks_like_assignment(parts[0])):
                 parts = parts[1:]
-        else:
+            continue
+        if p == "sudo":
             parts = parts[1:]
+            continue
+        break
     return " ".join(parts)
+
+
+# ---------- bashlex AST 辅助 ----------
+
+def _walk_all(node):
+    """递归遍历 bashlex AST，yield 每个节点。"""
+    if node is None or not hasattr(node, "kind"):
+        return
+    yield node
+    for attr in ("parts", "list", "command", "output"):
+        val = getattr(node, attr, None)
+        if val is None:
+            continue
+        if isinstance(val, list):
+            for child in val:
+                yield from _walk_all(child)
+        else:
+            yield from _walk_all(val)
+
+
+def _has_substitution(tree) -> bool:
+    """检测命令替换 $(...) / `...` 与进程替换 <(...) / >(...)。"""
+    for n in _walk_all(tree):
+        if n.kind in ("commandsubstitution", "processsubstitution"):
+            return True
+    return False
+
+
+def _has_dev_write_redirect(tree) -> bool:
+    """检测重定向到块设备（>/dev/sda 这类）。BLOCKED_PATTERNS 已用正则覆盖，
+    bashlex 路径下做一次冗余检查可处理 `>` 与目标间任意空白/换行的极端情形。"""
+    for n in _walk_all(tree):
+        if n.kind != "redirect":
+            continue
+        rtype = getattr(n, "type", "")
+        if rtype not in (">", ">>", "&>", ">|", "&>>"):
+            continue
+        out = getattr(n, "output", None)
+        target = getattr(out, "word", "") if out is not None else ""
+        if _DEV_WRITE_RE.match(target):
+            return True
+    return False
+
+
+def _command_segments_via_bashlex(command: str) -> tuple[list[str] | None, str | None]:
+    """用 bashlex 解析，返回 (各 command 节点的源串列表, 结构性 BLOCK 原因)。
+
+    返回值：
+      (segments, None)  解析成功
+      (None, reason)    结构性 BLOCK（命令替换、进程替换、设备写）
+      (None, None)      解析失败（调用方应 fail-safe HIGH）
+    """
+    try:
+        trees = bashlex.parse(command)
+    except Exception:
+        return None, None
+
+    for tree in trees:
+        if _has_substitution(tree):
+            return None, "命令包含 $(...) / `...` / <(...) 替换，安全策略不允许"
+        if _has_dev_write_redirect(tree):
+            return None, "命令试图重定向到块设备"
+
+    segments = []
+    for tree in trees:
+        for n in _walk_all(tree):
+            if n.kind == "command":
+                start, end = n.pos
+                segments.append(command[start:end])
+    return segments, None
 
 
 def _review_one(segment: str) -> SafetyResult:
@@ -186,6 +294,14 @@ def _review_one(segment: str) -> SafetyResult:
         return SafetyResult(
             RiskLevel.BLOCKED,
             f"交互式命令 '{first_word}' 无法在自动化环境中执行，请手动操作",
+            False,
+        )
+
+    # 二进制白名单：不在名单内一律 BLOCKED
+    if not is_allowed(first_word):
+        return SafetyResult(
+            RiskLevel.BLOCKED,
+            f"命令 '{first_word}' 不在白名单中。如确需放行，请加入 ~/.aiops/safety_allowlist.json",
             False,
         )
 
@@ -281,17 +397,28 @@ def review_command(command: str) -> SafetyResult:
     if not stripped:
         return SafetyResult(RiskLevel.SAFE, "空命令", False)
 
-    # 先对原始整串跑 BLOCKED 模式（tokenize 会拆碎 fork 炸弹等连续标点）
+    # 1. 先对原始整串跑 BLOCKED 正则模式
+    #    bashlex 可能解析失败（fork 炸弹的 :(){:|:&};: 不是合法 grammar），
+    #    或 tokenize 后无法还原；正则在原始字符层更鲁棒。
     for pattern in BLOCKED_PATTERNS:
         if pattern.search(stripped):
             return SafetyResult(RiskLevel.BLOCKED, f"命令被安全策略拦截: {stripped}", False)
 
-    # 拆分复合命令，逐段审查，取最高风险
-    try:
-        segments = _split_compound(stripped)
-    except ValueError:
-        return SafetyResult(RiskLevel.HIGH, "命令解析失败，无法完整审查", True)
+    # 2. 优先用 bashlex AST 走结构性检查（命令替换/进程替换/设备写重定向）
+    if _BASHLEX_AVAILABLE:
+        segments, block_reason = _command_segments_via_bashlex(stripped)
+        if block_reason:
+            return SafetyResult(RiskLevel.BLOCKED, block_reason, False)
+        if segments is None:
+            return SafetyResult(RiskLevel.HIGH, "命令解析失败，无法完整审查", True)
+    else:
+        # 回退：shlex 拆分
+        try:
+            segments = _split_compound(stripped)
+        except ValueError:
+            return SafetyResult(RiskLevel.HIGH, "命令解析失败，无法完整审查", True)
 
+    # 3. 逐段审查，取最高风险
     results = [_review_one(_strip_prefix(seg)) for seg in segments]
     return _max_risk(results)
 

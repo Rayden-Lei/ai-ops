@@ -168,3 +168,30 @@ def test_filereader_warn_path_medium():
 
 def test_filereader_normal_path_safe():
     assert review_command("cat /etc/nginx/nginx.conf").risk_level == RiskLevel.SAFE
+
+
+@pytest.mark.parametrize("cmd", [
+    "dd if=/dev/zero of=/tmp/x",
+    "fdisk -l",
+    "ssh user@host",
+    "scp foo user@host:/tmp/",
+    "perl -e 'print 1'",
+    "ruby -e 'puts 1'",
+])
+def test_binary_not_in_allowlist_blocked(cmd):
+    assert review_command(cmd).risk_level == RiskLevel.BLOCKED
+
+
+def test_leading_assignment_then_disallowed_binary_blocked():
+    # FOO=bar dd ... → 剥离 FOO=bar 后真正命令是 dd（不在白名单）
+    result = review_command("FOO=bar dd if=/dev/zero of=/tmp/x")
+    assert result.risk_level == RiskLevel.BLOCKED
+    assert "dd" in result.message
+
+
+def test_sudo_then_disallowed_binary_blocked():
+    assert review_command("sudo python -c 'print(1)'").risk_level == RiskLevel.BLOCKED
+
+
+def test_env_with_disallowed_binary_blocked():
+    assert review_command("env FOO=bar ssh user@host").risk_level == RiskLevel.BLOCKED
