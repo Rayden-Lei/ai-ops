@@ -47,7 +47,7 @@ def test_process_substitution_blocked(cmd):
 @pytest.mark.parametrize("cmd", [
     "dd if=/dev/zero of=/tmp/x",
     "fdisk -l",
-    "python -c 'print(1)'",
+    "python -c 'print(1)'",   # python 同时在 INTERACTIVE 里，消息可能是"交互式"；级别仍 BLOCKED
     "python3 script.py",
     "ssh user@host",
     "scp foo user@host:/tmp/",
@@ -58,7 +58,13 @@ def test_process_substitution_blocked(cmd):
     "ruby -e 'puts 1'",
 ])
 def test_binary_not_in_allowlist_blocked(cmd):
-    result = review_command(cmd)
+    # 只断级别，不锁消息——交互式命令的提示是"交互式..."，非交互式禁项是"...白名单"
+    assert review_command(cmd).risk_level == RiskLevel.BLOCKED
+
+
+def test_allowlist_block_message_for_noninteractive():
+    # 对非交互式且不在白名单的二进制，明确返回"白名单"提示
+    result = review_command("fdisk -l")
     assert result.risk_level == RiskLevel.BLOCKED
     assert "白名单" in result.message
 

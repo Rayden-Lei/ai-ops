@@ -9,7 +9,6 @@ from safety_allowlist import is_allowed
 
 try:
     import bashlex
-    import bashlex.errors  # noqa: F401
     _BASHLEX_AVAILABLE = True
 except ImportError:
     bashlex = None
