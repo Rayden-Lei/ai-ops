@@ -10,7 +10,10 @@ AiOps -- 基于 DeepSeek API + LangChain/LangGraph 的 AI Linux 运维助手。�
 
 ```bash
 # 安装依赖（无 requirements.txt，依赖列表见 setup.sh）
-pip install langchain langchain-openai langgraph rich
+pip install langchain langchain-openai langgraph rich bashlex
+# 沙箱（可选，强烈建议）
+sudo apt install bubblewrap    # Debian/Ubuntu
+sudo dnf install bubblewrap    # RHEL/CentOS
 
 # 交互模式运行
 python aiops.py
@@ -32,7 +35,8 @@ python aiops.py -r          # 选择历史对话恢复
 
 ```
 用户输入 → aiops.py（CLI 循环）→ agent.py（ReAct Agent）
-  → 工具选择 → [safety.py 安全审查（仅危险操作）] → tools.py 执行
+  → 工具选择 → [safety.py 三层审查：白名单 + AST + 模式] → tools.py 执行
+  → [sandbox.py bwrap/firejail 包装（仅 SAFE/LOW）] → 子进程
   → logger.py 审计日志 → Agent 总结 → rich 控制台输出
 ```
 
@@ -43,17 +47,30 @@ python aiops.py -r          # 选择历史对话恢复
 | `aiops.py` | 主入口、CLI 交互循环（`aiops>` 提示符）、会话持久化（JSONL）、命令历史、rich 流式输出 |
 | `agent.py` | 通过 `langgraph.prebuilt.create_react_agent` 构建 ReAct Agent，包含中文系统提示词 |
 | `tools.py` | 8 个工具，通过 `ALL_TOOLS` 列表导出；子进程封装 `_run_command()`，30s 超时，5000 字符截断 |
-| `safety.py` | 独立安全审查层：`review_command()`（5 级风险）和 `review_file_path()`（allow/warn/deny） |
+| `safety.py` | 安全审查层：`review_command()` 走 bashlex AST + 白名单 + 风险模式（5 级），`review_file_path()` (allow/warn/deny) |
+| `safety_allowlist.py` | 二进制白名单：`DEFAULT_ALLOWLIST` 约 80 项；用户 JSON 扩展 `~/.aiops/safety_allowlist.json` |
+| `sandbox.py` | bwrap/firejail 包装层，启动时检测后端；SAFE/LOW 自动执行走只读 / + tmpfs /tmp |
 | `logger.py` | `OpsLogger` 类，JSON Lines 格式写入 `~/.aiops/logs/ops.log`，10MB 轮转，5 个备份 |
 | `config.json` | 全局配置；用户级覆盖在 `~/.aiops/config.json`；环境变量 `DEEPSEEK_API_KEY` 优先级最高 |
 
 ### 安全审查层
 
-仅 `execute_command` 和 `read_file` 经过 `safety.py`，其余 6 个 `check_*`/`network_check` 工具为只读操作，直接放行。
+`execute_command` 经过 `safety.review_command()`、`read_file` 经过 `safety.review_file_path()`，其余 6 个 `check_*`/`network_check` 工具为参数受控的只读操作（已 shlex.quote），直接放行。
 
-- **命令风险分级**：BLOCKED（如 `rm -rf /`、`mkfs`）> HIGH（rm 涉及系统路径）> MEDIUM（`systemctl restart`、`kill`）> LOW > SAFE
-- **文件路径审查**：DENY（`~/.ssh/`、`/etc/shadow`）> WARN（`*.pem`、`*.key`）> ALLOW
-- **交互式命令**（vim、top、mysql）始终 BLOCKED（子进程无 TTY）
+`review_command()` 三阶判定：
+
+1. **BLOCKED 正则预扫**：`rm -rf /`、fork 炸弹 `:(){:|:&};:`、`> /dev/sd[a-z]` 等结构性致命模式
+2. **bashlex AST 解析**：命令替换 `$(...)` / 反引号 / 进程替换 `<(...) >(...)` 一律 BLOCKED（关闭 known-bypasses 中的"变量/命令替换"向量）；解析失败 → HIGH+confirm fail-safe
+3. **逐子命令分级**（每段先剥离 `NAME=VAL`/sudo/env 前缀，再判定）：
+   - **二进制白名单** (`safety_allowlist`)：首词不在 DEFAULT_ALLOWLIST 或用户 JSON 扩展中 → BLOCKED
+   - **交互式命令**（vim/top/python/bash 等）→ BLOCKED（子进程无 TTY）
+   - **HIGH**：rm 系统路径、chmod 777 系统路径、shutdown/reboot、iptables -F、userdel/groupdel
+   - **MEDIUM**：systemctl restart/stop、kill、mv/cp 进系统目录、crontab -e、所有包管理器子命令
+   - **文件路径审查**（review_file_path）：DENY（`~/.ssh/`、`/etc/shadow`、`/proc/*/mem`）> WARN（`*.pem`、`*.key`）> ALLOW
+
+### 沙箱（防御深度）
+
+`sandbox.py` 启动时检测 bwrap（优先）/ firejail。`execute_command` 在 SAFE/LOW 风险自动执行时套沙箱（只读 / + tmpfs /tmp + 共享网络）；MEDIUM/HIGH 经用户确认后绕过沙箱（只读 / 会让合法 `systemctl restart` 失败）。沙箱不可用时降级为普通 `bash -c`，审计日志中 `sandboxed=false` 标记。专用工具不套沙箱（参数已转义、模板固定）。
 
 ### 确认流程
 

