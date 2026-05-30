@@ -62,10 +62,10 @@ python aiops.py -r          # 选择历史对话恢复
 1. **BLOCKED 正则预扫**：`rm -rf /`、fork 炸弹 `:(){:|:&};:`、`> /dev/sd[a-z]` 等结构性致命模式
 2. **bashlex AST 解析**：命令替换 `$(...)` / 反引号 / 进程替换 `<(...) >(...)` 一律 BLOCKED（关闭 known-bypasses 中的"变量/命令替换"向量）；解析失败 → HIGH+confirm fail-safe
 3. **逐子命令分级**（每段先剥离 `NAME=VAL`/sudo/env 前缀，再判定）：
-   - **二进制白名单** (`safety_allowlist`)：首词不在 DEFAULT_ALLOWLIST 或用户 JSON 扩展中 → BLOCKED
-   - **交互式命令**（vim/top/python/bash 等）→ BLOCKED（子进程无 TTY）
+   - **交互式命令**（vim/top/python/bash/ssh 等）→ BLOCKED（子进程无 TTY，且常用作脚本宿主）
+   - **二进制白名单** (`safety_allowlist`)：首词不在 DEFAULT_ALLOWLIST 或用户 JSON 扩展 → **MEDIUM+confirm**（"未知二进制 X，是否本次放行"），让用户决定。结构性致命操作已由 BLOCKED 上游捕获，故"未知"≠"危险"，如 `docker ps`
    - **HIGH**：rm 系统路径、chmod 777 系统路径、shutdown/reboot、iptables -F、userdel/groupdel
-   - **MEDIUM**：systemctl restart/stop、kill、mv/cp 进系统目录、crontab -e、所有包管理器子命令
+   - **MEDIUM**：systemctl restart/stop、kill、mv/cp 进系统目录、crontab -e、所有包管理器子命令、未知二进制
    - **文件路径审查**（review_file_path）：DENY（`~/.ssh/`、`/etc/shadow`、`/proc/*/mem`）> WARN（`*.pem`、`*.key`）> ALLOW
 
 ### 沙箱（防御深度）

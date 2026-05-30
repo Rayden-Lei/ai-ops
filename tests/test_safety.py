@@ -173,25 +173,39 @@ def test_filereader_normal_path_safe():
 @pytest.mark.parametrize("cmd", [
     "dd if=/dev/zero of=/tmp/x",
     "fdisk -l",
-    "ssh user@host",
     "scp foo user@host:/tmp/",
     "perl -e 'print 1'",
     "ruby -e 'puts 1'",
+    "docker ps",
+    "kubectl get pods",
 ])
-def test_binary_not_in_allowlist_blocked(cmd):
+def test_unknown_binary_medium_confirm(cmd):
+    # 不在白名单 + 不在交互式 → MEDIUM+confirm，让用户决定本次是否放行
+    result = review_command(cmd)
+    assert result.risk_level == RiskLevel.MEDIUM
+    assert result.require_confirm is True
+
+
+@pytest.mark.parametrize("cmd", [
+    "ssh user@host",          # ssh 在 INTERACTIVE_COMMANDS
+    "python -c 'print(1)'",   # python 在 INTERACTIVE_COMMANDS
+])
+def test_interactive_binary_blocked_even_if_unknown(cmd):
+    # 交互式命令优先于白名单判定，仍硬拦截
     assert review_command(cmd).risk_level == RiskLevel.BLOCKED
 
 
-def test_leading_assignment_then_disallowed_binary_blocked():
-    # FOO=bar dd ... → 剥离 FOO=bar 后真正命令是 dd（不在白名单）
+def test_leading_assignment_then_unknown_binary_medium():
+    # FOO=bar dd ... → 剥离 FOO=bar 后真正命令是 dd（未知二进制 → MEDIUM）
     result = review_command("FOO=bar dd if=/dev/zero of=/tmp/x")
-    assert result.risk_level == RiskLevel.BLOCKED
+    assert result.risk_level == RiskLevel.MEDIUM
     assert "dd" in result.message
 
 
-def test_sudo_then_disallowed_binary_blocked():
+def test_sudo_then_interactive_binary_blocked():
+    # sudo python 剥离后是 python，python 在 INTERACTIVE 仍 BLOCKED
     assert review_command("sudo python -c 'print(1)'").risk_level == RiskLevel.BLOCKED
 
 
-def test_env_with_disallowed_binary_blocked():
+def test_env_then_interactive_binary_blocked():
     assert review_command("env FOO=bar ssh user@host").risk_level == RiskLevel.BLOCKED

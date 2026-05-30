@@ -296,12 +296,15 @@ def _review_one(segment: str) -> SafetyResult:
             False,
         )
 
-    # 二进制白名单：不在名单内一律 BLOCKED
+    # 二进制白名单：不在名单内的"未知"二进制走 MEDIUM+confirm；结构性致命
+    # 操作（rm -rf /、$(...)、mkfs.* 等）已由 BLOCKED_PATTERNS / AST 上游捕获，
+    # 故"未知"≠"危险"，让用户在 confirm 时决定即可（如 docker ps）。
     if not is_allowed(first_word):
         return SafetyResult(
-            RiskLevel.BLOCKED,
-            f"命令 '{first_word}' 不在白名单中。如确需放行，请加入 ~/.aiops/safety_allowlist.json",
-            False,
+            RiskLevel.MEDIUM,
+            f"未知二进制 '{first_word}'：不在默认白名单。如本次安全请确认；"
+            f"如需长期放行，请将其加入 ~/.aiops/safety_allowlist.json",
+            True,
         )
 
     # 禁止模式（逐段，补原始整串未覆盖的复合场景，如 'rm -rf / ; x'）

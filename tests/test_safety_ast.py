@@ -47,26 +47,36 @@ def test_process_substitution_blocked(cmd):
 @pytest.mark.parametrize("cmd", [
     "dd if=/dev/zero of=/tmp/x",
     "fdisk -l",
-    "python -c 'print(1)'",   # python 同时在 INTERACTIVE 里，消息可能是"交互式"；级别仍 BLOCKED
-    "python3 script.py",
-    "ssh user@host",
     "scp foo user@host:/tmp/",
     "rsync -av a/ b/",
     "nc -l 1234",
     "socat - TCP:host:80",
     "perl -e 'print 1'",
     "ruby -e 'puts 1'",
+    "docker ps",
 ])
-def test_binary_not_in_allowlist_blocked(cmd):
-    # 只断级别，不锁消息——交互式命令的提示是"交互式..."，非交互式禁项是"...白名单"
+def test_unknown_binary_medium_confirm(cmd):
+    # 非交互式 + 不在白名单 → MEDIUM+confirm（让用户决定本次放行）
+    result = review_command(cmd)
+    assert result.risk_level == RiskLevel.MEDIUM
+    assert result.require_confirm is True
+
+
+@pytest.mark.parametrize("cmd", [
+    "python -c 'print(1)'",
+    "python3 script.py",
+    "ssh user@host",
+])
+def test_interactive_binary_still_blocked(cmd):
+    # 交互式命令仍 BLOCKED——优先于白名单判定
     assert review_command(cmd).risk_level == RiskLevel.BLOCKED
 
 
-def test_allowlist_block_message_for_noninteractive():
-    # 对非交互式且不在白名单的二进制，明确返回"白名单"提示
+def test_allowlist_message_for_unknown_binary():
     result = review_command("fdisk -l")
-    assert result.risk_level == RiskLevel.BLOCKED
+    assert result.risk_level == RiskLevel.MEDIUM
     assert "白名单" in result.message
+    assert "fdisk" in result.message
 
 
 @pytest.mark.parametrize("cmd", [
