@@ -14,7 +14,14 @@ python3 -c "import sys; exit(0 if sys.version_info >= (3, 10) else 1)" 2>/dev/nu
 
 # 安装依赖
 echo "安装 Python 依赖..."
-pip install -q langchain langchain-openai langgraph rich
+pip install -q langchain langchain-openai langgraph rich bashlex
+
+# 沙箱可选依赖检测（不强制安装）
+if ! command -v bwrap >/dev/null 2>&1 && ! command -v firejail >/dev/null 2>&1; then
+    echo "提示: 未检测到 bwrap 或 firejail，execute_command 将以"未沙箱化"模式运行"
+    echo "  Debian/Ubuntu: sudo apt install bubblewrap"
+    echo "  RHEL/CentOS:   sudo dnf install bubblewrap"
+fi
 
 # 创建软链接
 if [ -f "$SCRIPT_DIR/aiops.py" ]; then

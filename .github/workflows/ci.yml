@@ -18,7 +18,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # 运行时依赖（无 requirements.txt，列表见 setup.sh）
-          pip install langchain langchain-openai langgraph rich
+          pip install langchain langchain-openai langgraph rich bashlex
           pip install -r requirements-dev.txt
 
       - name: Lint (ruff)
