@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 
 from safety import review_command, review_file_path, RiskLevel, FileReview
 from logger import OpsLogger
+from sandbox import wrap_argv
 
 
 _ops_logger: OpsLogger | None = None
@@ -22,10 +23,18 @@ def _log(tool_name: str, request_id: str = "", **kwargs):
         _ops_logger.log_tool_call(tool=tool_name, request_id=request_id, **kwargs)
 
 
-def _run_command(command: str, timeout: int = 30, request_id: str = "") -> str:
+def _run_command(command: str, timeout: int = 30, request_id: str = "",
+                 sandbox: bool = False) -> str:
+    """sandbox=True 时尝试套 bwrap/firejail；不可用则降级为普通 bash -c
+    （log 中 sandboxed 字段为 False）。专用工具调用时 sandbox=False，
+    因其参数已 shlex.quote、命令模板固定，无需重复施加只读 fs 限制。"""
     try:
+        if sandbox:
+            argv, sandboxed = wrap_argv(command)
+        else:
+            argv, sandboxed = ["bash", "-c", command], False
         result = subprocess.run(
-            ["bash", "-c", command],
+            argv,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -34,6 +43,8 @@ def _run_command(command: str, timeout: int = 30, request_id: str = "") -> str:
         output = (result.stdout + result.stderr).strip()
         if len(output) > 5000:
             output = "...\n" + output[-4997:]
+        if sandbox:
+            _log("_run_command", request_id, sandboxed=sandboxed)
         return output if output else "(无输出)"
     except subprocess.TimeoutExpired:
         return f"命令超时（{timeout}秒）"
@@ -66,9 +77,13 @@ def execute_command(command: str, confirmed: bool = False) -> str:
             "请询问用户是否确认执行此命令。用户确认后，再次调用 execute_command(command, confirmed=True)。"
         )
 
+    # SAFE/LOW 自动执行 → 套沙箱（防御深度）；MEDIUM/HIGH 经确认后绕过沙箱
+    # （只读 / 沙箱会让合法 systemctl restart 等变更失败）
+    use_sandbox = result.risk_level in (RiskLevel.SAFE, RiskLevel.LOW)
     _log("execute_command", request_id, command=command,
-         risk=result.risk_level.value, action="executed")
-    output = _run_command(command, request_id=request_id)
+         risk=result.risk_level.value, action="executed",
+         sandbox_requested=use_sandbox)
+    output = _run_command(command, request_id=request_id, sandbox=use_sandbox)
     _log("execute_command", request_id, command=command,
          risk=result.risk_level.value, action="executed", result="success",
          output_len=len(output))

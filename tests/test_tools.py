@@ -5,17 +5,37 @@ import pytest
 import tools
 
 
+class _Captured:
+    """像 list[str] 一样能索引/迭代/比较的轻量代理；.raw 给完整记录。"""
+    def __init__(self):
+        self.raw: list[dict] = []
+
+    def __getitem__(self, i):
+        return self.raw[i]["command"]
+
+    def __len__(self):
+        return len(self.raw)
+
+    def __iter__(self):
+        return (r["command"] for r in self.raw)
+
+    def __eq__(self, other):
+        if isinstance(other, list):
+            return [r["command"] for r in self.raw] == other
+        return NotImplemented
+
+
 @pytest.fixture
 def capture_cmd(monkeypatch):
-    """拦截 _run_command，记录构造出的命令，不真正执行。"""
-    captured = []
+    """拦截 _run_command，记录命令与 sandbox 标志，不真正执行。"""
+    cap = _Captured()
 
-    def fake_run(command, timeout=30, request_id=""):
-        captured.append(command)
+    def fake_run(command, timeout=30, request_id="", sandbox=False):
+        cap.raw.append({"command": command, "sandbox": sandbox})
         return ""
 
     monkeypatch.setattr(tools, "_run_command", fake_run)
-    return captured
+    return cap
 
 
 def test_check_service_quotes_name(capture_cmd):
@@ -64,3 +84,22 @@ def test_check_log_rejects_non_int_lines(capture_cmd):
     out = tools.check_log.func(lines="100; rm -rf ~")
     assert "无效 lines" in out
     assert capture_cmd == []
+
+
+def test_execute_command_safe_uses_sandbox(capture_cmd):
+    tools.execute_command.func("ls -la")
+    assert len(capture_cmd.raw) == 1
+    assert capture_cmd.raw[0]["sandbox"] is True
+
+
+def test_execute_command_confirmed_medium_bypasses_sandbox(capture_cmd):
+    # systemctl restart 是 MEDIUM，需 confirmed=True 才执行
+    tools.execute_command.func("systemctl restart nginx", confirmed=True)
+    assert len(capture_cmd.raw) == 1
+    assert capture_cmd.raw[0]["sandbox"] is False
+
+
+def test_execute_command_blocked_not_executed(capture_cmd):
+    out = tools.execute_command.func("rm -rf /")
+    assert "[拦截]" in out
+    assert capture_cmd.raw == []
